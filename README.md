@@ -34,3 +34,20 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+# Future Works
+Step 4: Create Content for "Search Intent"
+You currently have "Essential Insights" on your homepage. To rank on Google, you should expand these into dedicated blog posts or pages.
+
+Why? If someone searches "Can OFWs buy insurance in Singapore?", your homepage might not rank. But a dedicated article titled "The Complete Guide to Insurance for Employment Pass Holders in Singapore" likely will.
+
+Suggested Pages to Build Later:
+/blog/ofw-financial-guide-singapore (Targeting new arrivals)
+/blog/cpf-vs-cash-investment (Targeting Singaporeans)
+/services/insurance-claims (Highlighting your success stories like gallbladder/pneumonia claims ).
+
+Local SEO
+Since you are a physical service provider:
+Google My Business: Claim your profile. Ask your happy clients (like Ryann or Dr. Christina ) to leave a review specifically on Google Maps, not just your website.
+
+Citations: Ensure your name, phone number (+65...), and title are consistent across LinkedIn, Facebook, and your website.
