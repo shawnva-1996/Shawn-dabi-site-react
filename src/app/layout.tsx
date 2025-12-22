@@ -17,7 +17,7 @@ export const metadata: Metadata = {
   keywords: ["Financial Advisor Singapore", "Filipino Financial Advisor", "OFW Singapore Insurance", "Prudential Consultant Singapore", "Shawn Dabi"],
   openGraph: {
     title: "Shawn Dabi | Secure Your Future in SG",
-    description: "Helping over 100+ clients build wealth and stability. Let's plan your future today.",
+    description: "Helping over 150+ clients build wealth and stability. Let's plan your future today.",
     url: "https://shawndabi.com", // Replace with your actual domain
     siteName: "Shawn Dabi Finance",
     images: [
