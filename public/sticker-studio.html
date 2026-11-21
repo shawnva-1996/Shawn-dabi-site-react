@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sticker Studio · Shawn Dabi</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#faf8f3;color:#21281d;font:17px/1.55 system-ui,sans-serif}main{max-width:880px;margin:auto;padding:5vh 5vw}h1{font-size:clamp(40px,7vw,72px);letter-spacing:-.055em;margin:0}section{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:20px}figure{margin:0}figcaption{font-weight:650;padding:12px 0}canvas,img{display:block;width:100%;height:240px;object-fit:contain;border-radius:12px;background:repeating-conic-gradient(#ddd 0 25%,#fafafa 0 50%) 0/20px 20px}input{max-width:100%}button,a{color:#244518;font:inherit}button{padding:.45em 1em;border:1px solid;border-radius:8px;background:#ecf5de;cursor:pointer}footer{margin-top:2em;font-size:.88em}</style>
+<main><h1>Sticker Studio</h1><p>Remove a solid background and keep the artwork inside a white die-cut border. Try the illustrated orange below, or choose your own image. Processing happens in this browser.</p>
+<section><figure><figcaption>Original</figcaption><canvas id="source" width="400" height="400"></canvas></figure><figure><figcaption>Transparent PNG</figcaption><img id="output" alt="Processed sticker on a checkerboard"></figure></section>
+<p><label>Choose an image <input id="file" type="file" accept="image/*"></label></p><button id="sample">Use sample</button> <a id="save" hidden download="sticker.png">Download PNG</a><p id="status" role="status"></p>
+<footer>Shawn Dabi · VizTools</footer></main>
+<script type="module">
+/** VizTools Sticker Studio: client-only exterior segmentation.
+ *  No remote inference. Preserve the entire source RGB artwork inside the exterior silhouette.
+ *  This algorithm is for substantially uniform backgrounds, not arbitrary photographs.
+ */
+                                                 
+                                                                               
+                         
+                                                                                
+                                                                 
+ 
+const ix = (x       ,y       ,w       ) => y*w+x;
+function median(a         ) { a.sort((x,y)=>x-y); return a[Math.floor(a.length/2)] || 0; }
+function backgroundColor(p                  ,w       ,h       )                                               {
+  const band = Math.max(5, Math.min(22, Math.round(Math.min(w,h)*0.018)));
+  const r         =[],g         =[],b         =[];
+  for(let y=0;y<band;y++) for(let x=0;x<band;x++) {
+    for(const [cx,cy] of [[x,y],[w-1-x,y],[x,h-1-y],[w-1-x,h-1-y]]) {
+      const i=ix(cx,cy,w)*4;r.push(p[i]);g.push(p[i+1]);b.push(p[i+2]);
+    }
+  }
+  const rgb                       =[median(r),median(g),median(b)];
+  // 90th percentile absolute channel variation from background at corners.
+  const dev=r.map((v,i)=>Math.max(Math.abs(v-rgb[0]),Math.abs(g[i]-rgb[1]),Math.abs(b[i]-rgb[2]))).sort((x,y)=>x-y);
+  return {rgb, variation: dev[Math.floor(dev.length*.9)] || 0};
+}
+function connected(mask           ,w       ,h       ){
+  const n=w*h, visited=new Uint8Array(n), queue=new Int32Array(n);
+  const parts                                                                                   =[];
+  for(let i=0;i<n;i++){
+    if(!mask[i]||visited[i])continue;
+    let head=0,tail=1; queue[0]=i;visited[i]=1;
+    let minX=w,minY=h,maxX=0,maxY=0;
+    while(head<tail){const pos=queue[head++],x=pos%w,y=(pos/w)|0;
+      minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);
+      for(const q of [pos-1,pos+1,pos-w,pos+w]){
+        if(q<0||q>=n||(q===pos-1&&x===0)||(q===pos+1&&x===w-1)||visited[q]||!mask[q])continue;
+        visited[q]=1;queue[tail++]=q;
+      }
+    }
+    parts.push({size:tail,minX,minY,maxX,maxY,indices:queue.slice(0,tail)});
+  }
+  return parts.sort((a,b)=>b.size-a.size);
+}
+/** Dilation / erosion with a small 3x3 square, used to bridge JPEG fringe gaps. */
+function morph(mask           ,w       ,h       ,dilate        ) {
+  const dst=new Uint8Array(mask.length);
+  for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){
+    const i=ix(x,y,w);let hit=dilate?0:1;
+    outer: for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+      const v=mask[i+dy*w+dx];
+      if(dilate&&v){hit=1;break outer;}
+      if(!dilate&&!v){hit=0;break outer;}
+    }
+    dst[i]=hit;
+  }
+  return dst;
+}
+function fillHoles(mask           ,w       ,h       ){
+  const n=w*h, outside=new Uint8Array(n), q=new Int32Array(n);let head=0,tail=0;
+  const push=(i       )=>{if(!mask[i]&&!outside[i]){outside[i]=1;q[tail++]=i;}};
+  for(let x=0;x<w;x++){push(x);push((h-1)*w+x);}
+  for(let y=0;y<h;y++){push(y*w);push(y*w+w-1);}
+  while(head<tail){const i=q[head++],x=i%w;
+    if(x>0)push(i-1);if(x<w-1)push(i+1);
+    if(i>=w)push(i-w);if(i<n-w)push(i+w);
+  }
+  for(let i=0;i<n;i++)if(!outside[i])mask[i]=1;
+  return mask;
+}
+/** Chamfer distance (3/4 units) from the exterior to the nearest foreground pixel. */
+function outerDistance(mask           ,w       ,h       ){
+  const n=w*h, d=new Uint16Array(n);d.fill(30000);
+  for(let i=0;i<n;i++)if(mask[i])d[i]=0;
+  for(let y=1;y<h;y++)for(let x=1;x<w-1;x++){
+    const i=ix(x,y,w); d[i]=Math.min(d[i],d[i-1]+3,d[i-w]+3,d[i-w-1]+4,d[i-w+1]+4);
+  }
+  for(let y=h-2;y>=0;y--)for(let x=w-2;x>=1;x--){
+    const i=ix(x,y,w);d[i]=Math.min(d[i],d[i+1]+3,d[i+w]+3,d[i+w-1]+4,d[i+w+1]+4);
+  }
+  return d;
+}
+function blobFrom(canvas                  )               {
+  return new Promise((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(new Error('PNG export failed')),'image/png'));
+}
+export async function processSticker(file     , settings         )                {
+  const bitmap=await createImageBitmap(file);
+  try {
+    const scale=Math.min(1,Math.max(256,settings.size)/Math.max(bitmap.width,bitmap.height));
+    const w=Math.max(1,Math.round(bitmap.width*scale)),h=Math.max(1,Math.round(bitmap.height*scale));
+    const src=document.createElement('canvas');src.width=w;src.height=h;
+    const ctx=src.getContext('2d',{willReadFrequently:true});if(!ctx)throw Error('Canvas not supported');
+    ctx.drawImage(bitmap,0,0,w,h);
+    const img=ctx.getImageData(0,0,w,h),px=img.data,n=w*h;
+    const {rgb,variation}=backgroundColor(px,w,h);
+    const sourceHasAlpha=file.type==='image/png' && px.some((v,i)=>i%4===3&&v<248);
+    const raw=new Uint8Array(n);let sourceTransparency=0;
+    for(let i=0;i<n;i++){
+      const a=px[i*4+3];if(a<248)sourceTransparency++;
+      raw[i]=sourceHasAlpha?(a>50?1:0):(
+        Math.max(Math.abs(px[4*i]-rgb[0]),Math.abs(px[4*i+1]-rgb[1]),Math.abs(px[4*i+2]-rgb[2]))>settings.threshold?1:0);
+    }
+    const parts=connected(raw,w,h);if(!parts.length)throw Error('No foreground found. Try a lower threshold.');
+    const primary=parts[0], pad=Math.round(Math.min(w,h)*.10), keep=new Uint8Array(n);
+    let retained=0;
+    for(const part of parts){
+      const near=part.minX<=primary.maxX+pad && part.maxX>=primary.minX-pad && part.minY<=primary.maxY+pad && part.maxY>=primary.minY-pad;
+      if(part!==primary && (!near || part.size<Math.max(60,n*.0002)))continue;
+      for(const pos of part.indices)keep[pos]=1;retained++;
+    }
+    // Bridge a tiny number of disconnected JPEG pixels, then fill enclosed interior spaces.
+    const cleaned=morph(morph(keep,w,h,true),w,h,false);
+    fillHoles(cleaned,w,h);
+    const foreground=cleaned.reduce((s,v)=>s+v,0),fraction=foreground/n;
+    const reasons         =[];
+    if(variation>30&&!sourceHasAlpha)reasons.push('Background is not uniform at image corners');
+    if(fraction<.09||fraction>.83)reasons.push('Unusual sticker size — verify exterior silhouette');
+    const edgeCount=cleaned.slice(0,w).reduce((s,x)=>s+x,0)+cleaned.slice((h-1)*w).reduce((s,x)=>s+x,0);
+    if(edgeCount>Math.max(10,w*.02))reasons.push('Sticker may touch the image frame');
+    if(retained>10)reasons.push('Many separate foreground regions');
+    if(sourceHasAlpha&&sourceTransparency/n>.25)reasons.push('Existing PNG has extensive transparency; inspect the artwork');
+    if((primary.size/n)<.09)reasons.push('No dominant foreground region');
+    const outline=Math.max(0,Math.min(35,settings.outline));
+    const d=outerDistance(cleaned,w,h);
+    const rgba=new Uint8ClampedArray(n*4);
+    for(let i=0;i<n;i++){
+      const o=i*4;
+      if(cleaned[i]){rgba[o]=px[o];rgba[o+1]=px[o+1];rgba[o+2]=px[o+2];rgba[o+3]=sourceHasAlpha?Math.max(245,px[o+3]):255;}
+      else if(d[i]<=(outline+.5)*3){rgba[o]=255;rgba[o+1]=255;rgba[o+2]=255;rgba[o+3]=Math.min(255,Math.round(((outline+.5)*3-d[i])*85));}
+    }
+    const padPx=outline+25, side=Math.max(w,h)+padPx*2;
+    const output=document.createElement('canvas');output.width=side;output.height=side;
+    const out=output.getContext('2d');if(!out)throw Error('Canvas export unavailable');
+    const layer=document.createElement('canvas');layer.width=w;layer.height=h;
+    layer.getContext('2d')?.putImageData(new ImageData(rgba,w,h),0,0);
+    out.drawImage(layer,Math.floor((side-w)/2),Math.floor((side-h)/2));
+    return {blob:await blobFrom(output),width:side,height:side,status:reasons.length?'REVIEW':'PASS',reasons,background:rgb,foregroundFraction:fraction};
+  }finally{bitmap.close();}
+}
+
+const get = id => document.getElementById(id);
+const canvas = get('source'), ctx = canvas.getContext('2d');
+let revision = 0, outputUrl;
+async function render(file) {
+  const id = ++revision;
+  get('save').hidden = true;
+  get('output').removeAttribute('src');
+  if (outputUrl) URL.revokeObjectURL(outputUrl);
+  get('status').textContent = 'Processing…';
+  try {
+    if (file) {
+      const bitmap = await createImageBitmap(file);
+      if (id !== revision) { bitmap.close(); return; }
+      const scale = Math.min(1, 800 / Math.max(bitmap.width, bitmap.height));
+      canvas.width = Math.max(1,Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1,Math.round(bitmap.height * scale));
+      ctx.drawImage(bitmap,0,0,canvas.width,canvas.height);
+      bitmap.close();
+    } else {
+      canvas.width = canvas.height = 400;
+      ctx.fillStyle='#eee8d8';ctx.fillRect(0,0,400,400);
+      ctx.lineWidth=14;ctx.strokeStyle='white';ctx.fillStyle='#ed792f';
+      ctx.beginPath();ctx.arc(200,221,87,0,2*Math.PI);ctx.stroke();ctx.fill();
+      ctx.fillStyle='#436c35';ctx.beginPath();ctx.ellipse(222,127,37,17,-.55,0,2*Math.PI);ctx.stroke();ctx.fill();
+      ctx.fillStyle='white';ctx.font='bold 24px system-ui';ctx.textAlign='center';ctx.fillText('ORANGE',200,231);
+    }
+    const input = await new Promise(resolve => canvas.toBlob(resolve));
+    const result = await processSticker(new File([input],'input.png'),{size:800,threshold:28,outline:6});
+    if (id !== revision) return;
+    outputUrl=URL.createObjectURL(result.blob);
+    get('output').src=get('save').href=outputUrl;
+    get('save').hidden=false;
+    get('status').textContent=result.status==='PASS'?'Ready to download.':'Review the outline. '+result.reasons.join('. ');
+  } catch { if (id===revision) get('status').textContent='Could not isolate the sticker. Try a PNG or JPEG with a plain background.'; }
+}
+get('sample').onclick=()=>{get('file').value='';render();};
+get('file').onchange=e=>{if(e.target.files.length)render(e.target.files[0]);};
+render();
+</script></html>
